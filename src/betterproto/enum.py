@@ -12,8 +12,8 @@ from typing import (
     Dict,
     Optional,
     Tuple,
+    Type,
 )
-
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -31,17 +31,22 @@ def _is_descriptor(obj: object) -> bool:
     return (
         hasattr(obj, "__get__") or hasattr(obj, "__set__") or hasattr(obj, "__delete__")
     )
+if TYPE_CHECKING:
+    BaseMetaType = EnumMeta
+    BaseType = IntEnum
+else:
+    BaseMetaType = type
+    BaseType = int
 
-
-class EnumType(EnumMeta if TYPE_CHECKING else type):
+class EnumType(BaseMetaType):
     _value_map_: Mapping[int, Enum]
-    _member_map_: Mapping[str, Enum]
+    _member_map_: Mapping[str, Enum]  # type: ignore[assignment]
 
     def __new__(
         mcs, name: str, bases: Tuple[type, ...], namespace: Dict[str, Any]
-    ) -> Self:
-        value_map = {}
-        member_map = {}
+    ) -> Type[Enum]:
+        value_map: dict[str, Enum] = {}
+        member_map: dict[str, Enum] = {}
 
         new_mcs = type(
             f"{name}Type",
@@ -60,7 +65,7 @@ class EnumType(EnumMeta if TYPE_CHECKING else type):
             if not _is_descriptor(value) and not name.startswith("__")
         }
 
-        cls = type.__new__(
+        cls: Type[Enum] = type.__new__(
             new_mcs,
             name,
             bases,
@@ -72,7 +77,7 @@ class EnumType(EnumMeta if TYPE_CHECKING else type):
         for name, value in members.items():
             member = value_map.get(value)
             if member is None:
-                member = cls.__new__(cls, name=name, value=value)  # type: ignore
+                member = cls.__new__(cls, name=name, value=value)
                 value_map[value] = member
             member_map[name] = member
             type.__setattr__(new_mcs, name, member)
@@ -81,56 +86,65 @@ class EnumType(EnumMeta if TYPE_CHECKING else type):
 
     if not TYPE_CHECKING:
 
+        @classmethod
         def __call__(cls, value: int) -> Enum:
             try:
                 return cls._value_map_[value]
             except (KeyError, TypeError):
                 raise ValueError(f"{value!r} is not a valid {cls.__name__}") from None
 
+        @classmethod
         def __iter__(cls) -> Generator[Enum, None, None]:
             yield from cls._member_map_.values()
 
-        if sys.version_info >= (3, 8):  # 3.8 added __reversed__ to dict_values
+        if sys.version_info >= (3, 8):
 
+            @classmethod
             def __reversed__(cls) -> Generator[Enum, None, None]:
                 yield from reversed(cls._member_map_.values())
 
         else:
 
+            @classmethod
             def __reversed__(cls) -> Generator[Enum, None, None]:
                 yield from reversed(tuple(cls._member_map_.values()))
 
+        @classmethod
         def __getitem__(cls, key: str) -> Enum:
             return cls._member_map_[key]
 
-        @property
+        @classmethod
         def __members__(cls) -> MappingProxyType[str, Enum]:
             return MappingProxyType(cls._member_map_)
 
+    @classmethod
     def __repr__(cls) -> str:
         return f"<enum {cls.__name__!r}>"
 
-    def __len__(cls) -> int:
+    @classmethod
+    def __len__(cls) -> int: 
         return len(cls._member_map_)
 
-    def __setattr__(cls, name: str, value: Any) -> Never:
-        raise AttributeError(f"{cls.__name__}: cannot reassign Enum members.")
+    @classmethod
+    def __setattr__(cls, name: str, value: Any) -> Never: 
+        raise AttributeError(f"{cls.__name__}: cannot reassign Enum classes.")
 
+    @classmethod
     def __delattr__(cls, name: str) -> Never:
-        raise AttributeError(f"{cls.__name__}: cannot delete Enum members.")
+        raise AttributeError(f"{cls.__name__}: cannot delete Enum classes.")
 
+    @classmethod
     def __contains__(cls, member: object) -> bool:
-        return isinstance(member, cls) and member.name in cls._member_map_
+        return isinstance(member, cls) and isinstance(member, Enum) and member.name in cls._member_map_
 
-
-class Enum(IntEnum if TYPE_CHECKING else int, metaclass=EnumType):
+class Enum(BaseType, metaclass=EnumType):
     """
     The base class for protobuf enumerations, all generated enumerations will
     inherit from this. Emulates `enum.IntEnum`.
     """
 
-    name: Optional[str]
-    value: int
+    name: str
+    value: int  # type: ignore[misc]
 
     if not TYPE_CHECKING:
 
@@ -178,7 +192,10 @@ class Enum(IntEnum if TYPE_CHECKING else int, metaclass=EnumType):
             ``value`` isn't actually a member.
         """
         try:
-            return cls._value_map_[value]
+            value = cls._value_map_[value]
+            if not isinstance(value, type(cls)):
+                raise TypeError(f'{value} should be of same type as {cls.__name__}')
+            return value
         except (KeyError, TypeError):
             return cls.__new__(cls, name=None, value=value)
 
@@ -197,6 +214,9 @@ class Enum(IntEnum if TYPE_CHECKING else int, metaclass=EnumType):
             The member was not found in the Enum.
         """
         try:
-            return cls._member_map_[name]
+            member  = cls._member_map_[name]
+            if not isinstance(member, type(cls)):
+                raise TypeError(f'{member} should be of the same type as {cls.__name__}')
+            return member 
         except KeyError as e:
             raise ValueError(f"Unknown value {name} for enum {cls.__name__}") from e
